@@ -193,20 +193,63 @@
       margin-bottom: 0.75rem;
     }
 
-    .converter .form-row {
-      display: flex;
-      gap: 1rem;
-      align-items: flex-end;
-      flex-wrap: wrap;
+    .converter-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 0.75rem;
+      align-items: end;
+      margin-bottom: 0.75rem;
     }
 
-    .converter .form-row .form-group {
-      flex: 1;
-      min-width: 140px;
+    .converter-row .form-group {
+      margin-bottom: 0;
     }
 
-    .converter input[type="number"] {
+    .converter-row input[type="number"] {
       max-width: 100%;
+    }
+
+    .converter-row .remove-row {
+      padding: 0.5rem 0.6rem;
+      border: 2px solid var(--mid-grey);
+      border-radius: var(--radius);
+      background: var(--white);
+      color: var(--dark-grey);
+      cursor: pointer;
+      font-size: 1rem;
+      font-family: inherit;
+      width: 100%;
+    }
+
+    .converter-row .remove-row:hover {
+      border-color: var(--red);
+      color: var(--red);
+    }
+
+    .converter-row-pa {
+      font-size: 0.8rem;
+      color: var(--dark-grey);
+      grid-column: 1 / -1;
+      margin-bottom: 0.35rem;
+    }
+
+    .converter-add {
+      display: inline-block;
+      margin-top: 0.25rem;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--blue);
+      background: var(--white);
+      border: 1px solid var(--blue);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .converter-add:hover {
+      background: var(--blue);
+      color: var(--white);
     }
 
     .converter-result {
@@ -420,7 +463,8 @@
       min-width: 140px;
     }
 
-    .batch-calc input[type="number"] {
+    .batch-calc input[type="number"],
+    .batch-calc .form-row input[type="number"] {
       max-width: 100%;
     }
 
@@ -442,7 +486,7 @@
       header h1 { font-size: 1.35rem; }
       .result-cards { grid-template-columns: 1fr; }
       .result-card .result-value { font-size: 1.5rem; }
-      .converter .form-row { flex-direction: column; gap: 0; }
+      .converter-row { grid-template-columns: 1fr 1fr auto; }
       .batch-calc .form-row { flex-direction: column; gap: 0; }
     }
   </style>
@@ -502,18 +546,10 @@
       <button type="button" class="converter-toggle" id="converterToggle">Help me calculate this from product volume</button>
 
       <div class="converter" id="converter">
-        <h3>Convert product volume to pure alcohol</h3>
-        <p class="hint" style="margin-bottom: 0.75rem;">Enter your total annual product volume and its average ABV to calculate hectolitres of pure alcohol.</p>
-        <div class="form-row">
-          <div class="form-group">
-            <label for="convVolume">Product volume (hectolitres)</label>
-            <input type="number" id="convVolume" min="0" step="0.1" placeholder="e.g. 3000">
-          </div>
-          <div class="form-group">
-            <label for="convAbv">Average ABV (%)</label>
-            <input type="number" id="convAbv" min="0.1" max="100" step="0.1" placeholder="e.g. 3.5">
-          </div>
-        </div>
+        <h3>Convert product volumes to pure alcohol</h3>
+        <p class="hint" style="margin-bottom: 0.75rem;">Add each product you brew or produce annually. We'll sum the pure alcohol across all of them.</p>
+        <div id="converterRows"></div>
+        <button type="button" class="converter-add" id="converterAdd">+ Add another product</button>
         <div class="converter-result" id="converterResult"></div>
       </div>
     </div>
@@ -1062,24 +1098,102 @@ document.getElementById("converterToggle").addEventListener("click", () => {
     : "Help me calculate this from product volume";
 });
 
-/* Volume converter calculation */
-function updateConverter() {
-  const volume = parseFloat(document.getElementById("convVolume").value);
-  const abv = parseFloat(document.getElementById("convAbv").value);
-  const resultEl = document.getElementById("converterResult");
+/* Volume converter — multi-product rows */
+let converterRowId = 0;
 
-  if (!volume || !abv || volume <= 0 || abv <= 0) {
+function addConverterRow() {
+  const rowsEl = document.getElementById("converterRows");
+  const id = converterRowId++;
+  const row = document.createElement("div");
+  row.className = "converter-row";
+  row.dataset.rowId = id;
+  row.innerHTML = `
+    <div class="form-group">
+      <label for="convVol_${id}">Volume (litres)</label>
+      <input type="number" id="convVol_${id}" min="0" step="1" placeholder="e.g. 300000">
+    </div>
+    <div class="form-group">
+      <label for="convAbv_${id}">ABV (%)</label>
+      <input type="number" id="convAbv_${id}" min="0.1" max="100" step="0.1" placeholder="e.g. 3.5">
+    </div>
+    <div class="form-group">
+      <label>&nbsp;</label>
+      <button type="button" class="remove-row" title="Remove this product">&times;</button>
+    </div>
+  `;
+  rowsEl.appendChild(row);
+
+  row.querySelector(".remove-row").addEventListener("click", () => {
+    row.remove();
+    updateConverterTotal();
+  });
+  row.querySelectorAll("input").forEach(input => {
+    input.addEventListener("input", updateConverterTotal);
+  });
+}
+
+function updateConverterTotal() {
+  const rows = document.querySelectorAll(".converter-row");
+  const resultEl = document.getElementById("converterResult");
+  let totalPureAlcoholLitres = 0;
+  let hasAnyInput = false;
+
+  rows.forEach(row => {
+    const volInput = row.querySelector("input[id^='convVol_']");
+    const abvInput = row.querySelector("input[id^='convAbv_']");
+    const volume = parseFloat(volInput?.value);
+    const abv = parseFloat(abvInput?.value);
+
+    if (volume > 0 && abv > 0) {
+      totalPureAlcoholLitres += volume * (abv / 100);
+      hasAnyInput = true;
+    }
+  });
+
+  if (!hasAnyInput) {
     resultEl.textContent = "";
     return;
   }
 
-  const pureAlcohol = volume * (abv / 100);
-  resultEl.innerHTML = `= <strong>${formatNumber(pureAlcohol)} hectolitres</strong> of pure alcohol
-    <button type="button" style="margin-left: 0.5rem; font-size: 0.8rem; padding: 0.2rem 0.6rem; cursor: pointer; border: 1px solid var(--blue); background: var(--white); color: var(--blue); border-radius: var(--radius); font-family: inherit;" onclick="document.getElementById('production').value = ${pureAlcohol.toFixed(2)}; this.textContent = 'Done';">Use this value</button>`;
+  let breakdownLines = [];
+  let sumParts = [];
+  let lineNumber = 1;
+
+  rows.forEach(row => {
+    const volInput = row.querySelector("input[id^='convVol_']");
+    const abvInput = row.querySelector("input[id^='convAbv_']");
+    const volume = parseFloat(volInput?.value);
+    const abv = parseFloat(abvInput?.value);
+
+    if (volume > 0 && abv > 0) {
+      const pureAlcoholLitres = volume * (abv / 100);
+      const pureAlcoholHL = pureAlcoholLitres / 100;
+      breakdownLines.push(`${lineNumber}. ${volume.toLocaleString("en-GB")} litres &times; ${abv}% = ${formatNumber(pureAlcoholLitres)} litres = <strong>${formatNumber(pureAlcoholHL)} hl</strong> of pure alcohol`);
+      sumParts.push(formatNumber(pureAlcoholHL));
+      lineNumber++;
+    }
+  });
+
+  const totalHL = totalPureAlcoholLitres / 100;
+  let html = breakdownLines.join("<br>");
+
+  if (breakdownLines.length > 1) {
+    html += `<br><strong>Total: ${sumParts.join(" + ")} = ${formatNumber(totalHL)} hectolitres</strong> of pure alcohol`;
+  }
+
+  html += ` <button type="button" style="margin-left: 0.5rem; font-size: 0.8rem; padding: 0.2rem 0.6rem; cursor: pointer; border: 1px solid var(--blue); background: var(--white); color: var(--blue); border-radius: var(--radius); font-family: inherit;" id="useConverterValue">Use this value</button>`;
+
+  resultEl.innerHTML = html;
+  document.getElementById("useConverterValue").addEventListener("click", function() {
+    document.getElementById("production").value = totalHL.toFixed(2);
+    this.textContent = "Done";
+  });
 }
 
-document.getElementById("convVolume").addEventListener("input", updateConverter);
-document.getElementById("convAbv").addEventListener("input", updateConverter);
+document.getElementById("converterAdd").addEventListener("click", addConverterRow);
+
+/* Start with one row */
+addConverterRow();
 </script>
 
 </body>
